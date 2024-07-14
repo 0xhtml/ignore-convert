@@ -59,8 +59,9 @@ const Patterns = struct {
 
 pub const State = struct {
     matcher: Patterns.PatternMatcher,
+    offset: usize,
 
-    pub fn init(file: std.fs.File) !@This() {
+    pub fn init(file: std.fs.File, path_offset: usize) !@This() {
         // TODO move to more global state
         const patterns = try Patterns.init();
         defer patterns.deinit();
@@ -71,6 +72,7 @@ pub const State = struct {
 
         return .{
             .matcher = matcher,
+            .offset = path_offset,
         };
     }
 
@@ -79,8 +81,8 @@ pub const State = struct {
         s.* = undefined;
     }
 
-    pub fn skip(s: @This(), path: []const u8) !bool {
-        return s.matcher.match(path);
+    pub fn skip(s: @This(), path: [*:0]u8) !bool {
+        return s.matcher.match(std.mem.span(path[s.offset..]));
     }
 };
 

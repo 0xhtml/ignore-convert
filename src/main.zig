@@ -11,10 +11,10 @@ const State = union(enum) {
     borg: borg.State,
     git: git.State,
 
-    pub fn update(s: @This(), dir: std.fs.Dir, entry: std.fs.Dir.Entry) !@This() {
+    pub fn update(s: @This(), path: [*:0]u8, entry: std.fs.Dir.Entry) !@This() {
         return switch (s) {
             .borg => |b| .{ .borg = b },
-            .git => |g| .{ .git = try g.update(dir, entry) },
+            .git => |g| .{ .git = try g.update(path, entry.kind) },
         };
     }
 
@@ -49,14 +49,17 @@ const Return = enum {
 const RecurseState = struct {
     path: [std.fs.MAX_PATH_BYTES:0]u8,
 
-    fn recurseRoot(allocator: std.mem.Allocator, dir: std.fs.Dir, states: []const State) !void {
-        var recurse_state = RecurseState{ .path = undefined };
-        recurse_state.path[0] = 0;
+    fn recurseRoot(allocator: std.mem.Allocator, path: []const u8, states: []const State) !void {
+        var dir = try std.fs.cwd().openDir(path, .{ .iterate = true });
+        defer dir.close();
 
-        // const dir_w_path = .{ .dir = dir, .path = "" };
+        var state = RecurseState{ .path = undefined };
+        @memcpy(state.path[0..path.len], path);
+        state.path[path.len] = 0;
+
         var it = dir.iterate();
         while (try it.next()) |entry| {
-            switch (try recurse_state.recurse(allocator, dir, entry, states)) {
+            switch (try state.recurse(allocator, dir, entry, states)) {
                 .exclude => std.debug.print("- {s}\n", .{entry.name}),
                 .include => std.debug.print("+ {s}\n", .{entry.name}),
                 .ignore => {},
@@ -90,7 +93,7 @@ const RecurseState = struct {
             _states.deinit();
         }
         for (states) |state| {
-            var _state = try state.update(dir, entry);
+            var _state = try state.update(&s.path, entry);
             errdefer _state.free();
             try _states.append(_state);
             if (try _state.skip(&s.path, entry)) return .exclude;
@@ -162,7 +165,7 @@ pub fn main() !void {
             const file = try std.fs.cwd().openFile(args.next() orelse printUsageAndExit(program_name), .{});
             defer file.close();
 
-            var state = try borg.State.init(file);
+            var state = try borg.State.init(file, path.len);
             errdefer state.deinit();
 
             try states.append(.{ .borg = state });
@@ -173,8 +176,5 @@ pub fn main() !void {
         }
     }
 
-    var dir = try std.fs.cwd().openDir(path, .{ .iterate = true });
-    defer dir.close();
-
-    try RecurseState.recurseRoot(arena.allocator(), dir, states.items);
+    try RecurseState.recurseRoot(arena.allocator(), path, states.items);
 }

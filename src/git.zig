@@ -13,18 +13,13 @@ pub const State = struct {
         return .{ .repo = null, .offset = 0, .owner = false };
     }
 
-    pub fn update(s: @This(), dir: std.fs.Dir, entry: std.fs.Dir.Entry) !@This() {
-        if (s.repo != null or entry.kind != .directory) {
+    pub fn update(s: @This(), path: [*:0]u8, kind: std.fs.Dir.Entry.Kind) !@This() {
+        if (s.repo != null or kind != .directory) {
             return .{ .repo = s.repo, .offset = s.offset, .owner = false};
         }
 
-        // TODO: replace with base_path ++ path if more performant
-        // TODO: or just save the prefix that has to be removed
-        var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
-        const path = try std.posix.toPosixPath(try dir.realpath(entry.name, buf[0..]));
-
         var repo: ?*libgit2.git_repository = null;
-        _ = libgit2.git_repository_open(&repo, &path);
+        _ = libgit2.git_repository_open(&repo, path);
         if (repo) |_| {
             _ = libgit2.git_repository_submodule_cache_all(repo);
         }

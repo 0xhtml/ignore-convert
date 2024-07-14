@@ -1,5 +1,4 @@
 const std = @import("std");
-const common = @import("common.zig");
 const python = @cImport({
     @cDefine("PY_SSIZE_T_CLEAN", "");
     @cInclude("python3.12/Python.h");
@@ -80,10 +79,8 @@ pub const State = struct {
         s.* = undefined;
     }
 
-    pub fn skip(s: *const @This(), allocator: std.mem.Allocator, path: []const u8, name: []const u8) !bool {
-        const _path = try common.concatPath(allocator, path, name);
-        defer allocator.free(_path);
-        return s.matcher.match(_path);
+    pub fn skip(s: @This(), path: []const u8) !bool {
+        return s.matcher.match(path);
     }
 };
 

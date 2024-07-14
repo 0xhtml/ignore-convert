@@ -1,62 +1,46 @@
 const std = @import("std");
-const common = @import("common.zig");
 const libgit2 = @cImport({
     @cInclude("git2.h");
     @cInclude("git2/sys/repository.h");
 });
 
 pub const State = struct {
-    repo: ?struct {
-        ptr: *libgit2.git_repository,
-        path: []const u8,
-    },
+    repo: ?*libgit2.git_repository,
+    offset: usize,
+    owner: bool,
 
     pub fn init() @This() {
-        return .{ .repo = null };
+        return .{ .repo = null, .offset = 0, .owner = false };
     }
 
-    pub fn update(s: *const @This(), allocator: std.mem.Allocator, dir: std.fs.Dir, entry: std.fs.Dir.Entry) !@This() {
-        if (s.repo) |_repo| {
-            return .{
-                .repo = .{
-                    .ptr = _repo.ptr,
-                    .path = try common.concatPath(allocator, _repo.path, entry.name),
-                },
-            };
+    pub fn update(s: @This(), dir: std.fs.Dir, entry: std.fs.Dir.Entry) !@This() {
+        if (s.repo != null or entry.kind != .directory) {
+            return .{ .repo = s.repo, .offset = s.offset, .owner = false};
         }
-
-        if (entry.kind != .directory) return .{ .repo = null };
 
         // TODO: replace with base_path ++ path if more performant
         // TODO: or just save the prefix that has to be removed
         var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
         const path = try std.posix.toPosixPath(try dir.realpath(entry.name, buf[0..]));
 
-        var ptr: ?*libgit2.git_repository = null;
-        _ = libgit2.git_repository_open(&ptr, &path);
-        if (ptr) |_ptr| {
-            _ = libgit2.git_repository_submodule_cache_all(_ptr);
-            return .{
-                .repo = .{
-                    .ptr = _ptr,
-                    .path = "",
-                },
-            };
+        var repo: ?*libgit2.git_repository = null;
+        _ = libgit2.git_repository_open(&repo, &path);
+        if (repo) |_| {
+            _ = libgit2.git_repository_submodule_cache_all(repo);
         }
-
-        return .{ .repo = null };
+        return .{ .repo = repo, .offset = 0, .owner = true };
     }
 
-    pub fn skip(s: *const @This(), kind: std.fs.Dir.Entry.Kind) !bool {
-        if (s.repo) |_repo| {
-            const c_path = try std.posix.toPosixPath(_repo.path);
+    pub fn skip(s: @This(), path: [*:0]u8, kind: std.fs.Dir.Entry.Kind) !bool {
+        if (s.repo != null) {
+            const offset_path = path[s.offset..];
 
-            if (kind == .directory and libgit2.git_submodule_lookup(null, _repo.ptr, &c_path) >= 0) {
+            if (kind == .directory and libgit2.git_submodule_lookup(null, s.repo, offset_path) >= 0) {
                 return true;
             }
 
             var ignored: c_int = undefined;
-            if (libgit2.git_ignore_path_is_ignored(&ignored, _repo.ptr, &c_path) < 0) {
+            if (libgit2.git_ignore_path_is_ignored(&ignored, s.repo, offset_path) < 0) {
                 return error.InvalidIgnoreRules;
             }
             return switch (ignored) {
@@ -69,14 +53,8 @@ pub const State = struct {
         return false;
     }
 
-    pub fn free(s: *@This(), allocator: std.mem.Allocator) void {
-        if (s.repo) |_repo| {
-            if (_repo.path.len == 0) {
-                libgit2.git_repository_free(_repo.ptr);
-            } else {
-                allocator.free(_repo.path);
-            }
-        }
+    pub fn free(s: *@This()) void {
+        if (s.repo != null and s.owner) libgit2.git_repository_free(s.repo);
         s.* = undefined;
     }
 };

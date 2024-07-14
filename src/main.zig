@@ -92,37 +92,47 @@ fn recurse(allocator: std.mem.Allocator, path_dir: PathDir, entry: std.fs.Dir.En
     var _path_dir = try path_dir.openDir(allocator, entry.name);
     defer _path_dir.free(allocator);
 
-    var ret: Return = .ignore;
-
-    // TODO test if lazy allocation or smth if faster
     var excluded = std.ArrayList([]const u8).init(allocator);
-    defer excluded.deinit();
+    defer {
+        for (excluded.items) |name| allocator.free(name);
+        excluded.deinit();
+    }
+
+    var included = std.ArrayList([]const u8).init(allocator);
+    defer {
+        for (included.items) |name| allocator.free(name);
+        included.deinit();
+    }
 
     var it = _path_dir.dir.iterate();
     while (try it.next()) |_entry| {
+        const name = try allocator.dupe(u8, _entry.name);
+        errdefer allocator.free(name);
+
         switch (try recurse(allocator, _path_dir, _entry, _states.items)) {
-            .exclude => {
-                if (ret == .ignore) ret = .exclude;
-                try excluded.append(_entry.name);
-            },
-            .include => ret = .include,
-            .ignore => {},
+            .exclude => try excluded.append(name),
+            .include => try included.append(name),
+            .ignore => allocator.free(name),
         }
     }
 
-    if (ret == .include) for (excluded.items) |name| {
-        std.debug.print("{s}/{s}\n", .{ _path_dir.path, name });
-    };
-
-    return ret;
+    if (included.items.len != 0 and excluded.items.len != 0) {
+        for (excluded.items) |name| std.debug.print("- {s}/{s}\n", .{ _path_dir.path, name });
+        for (included.items) |name| std.debug.print("+ {s}/{s}\n", .{ _path_dir.path, name });
+        return .include;
+    }
+    if (included.items.len == 0 and excluded.items.len != 0) return .exclude;
+    return .ignore;
 }
 
 fn recurseRoot(allocator: std.mem.Allocator, dir: std.fs.Dir, states: []const State) !void {
     const dir_w_path = .{ .dir = dir, .path = "" };
     var it = dir.iterate();
     while (try it.next()) |entry| {
-        if (try recurse(allocator, dir_w_path, entry, states) == .exclude) {
-            std.debug.print("{s}\n", .{entry.name});
+        switch (try recurse(allocator, dir_w_path, entry, states)) {
+            .exclude => std.debug.print("- {s}\n", .{entry.name}),
+            .include => std.debug.print("+ {s}\n", .{entry.name}),
+            .ignore => {},
         }
     }
 }

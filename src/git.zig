@@ -47,11 +47,11 @@ pub const State = struct {
         return .{ .repo = null };
     }
 
-    pub fn skip(s: *const @This(), entry: std.fs.Dir.Entry) !bool {
+    pub fn skip(s: *const @This(), kind: std.fs.Dir.Entry.Kind) !bool {
         if (s.repo) |_repo| {
             const c_path = try std.posix.toPosixPath(_repo.path);
 
-            if (entry.kind == .directory and libgit2.git_submodule_lookup(null, _repo.ptr, &c_path) >= 0) {
+            if (kind == .directory and libgit2.git_submodule_lookup(null, _repo.ptr, &c_path) >= 0) {
                 return true;
             }
 

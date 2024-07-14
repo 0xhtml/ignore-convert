@@ -60,7 +60,6 @@ const Patterns = struct {
 
 pub const State = struct {
     matcher: Patterns.PatternMatcher,
-    relative_path: []const u8,
 
     pub fn init(file: std.fs.File) !@This() {
         // TODO move to more global state
@@ -73,7 +72,6 @@ pub const State = struct {
 
         return .{
             .matcher = matcher,
-            .relative_path = "",
         };
     }
 
@@ -82,20 +80,10 @@ pub const State = struct {
         s.* = undefined;
     }
 
-    pub fn update(s: *const @This(), allocator: std.mem.Allocator, entry: std.fs.Dir.Entry) !@This() {
-        return .{
-            .matcher = s.matcher,
-            .relative_path = try common.concatPath(allocator, s.relative_path, entry.name),
-        };
-    }
-
-    pub fn skip(s: *const @This()) !bool {
-        return s.matcher.match(s.relative_path);
-    }
-
-    pub fn free(s: *@This(), allocator: std.mem.Allocator) void {
-        allocator.free(s.relative_path);
-        s.* = undefined;
+    pub fn skip(s: *const @This(), allocator: std.mem.Allocator, path: []const u8, name: []const u8) !bool {
+        const _path = try common.concatPath(allocator, path, name);
+        defer allocator.free(_path);
+        return s.matcher.match(_path);
     }
 };
 

@@ -30,23 +30,23 @@ const State = union(enum) {
     borg: borg.State,
     git: git.State,
 
-    pub fn update(s: *const @This(), allocator: std.mem.Allocator, dir: std.fs.Dir, entry: std.fs.Dir.Entry) !@This() {
+    pub fn update(s: *const @This(), allocator: std.mem.Allocator, path_dir: PathDir, entry: std.fs.Dir.Entry) !@This() {
         return switch (s.*) {
-            .borg => |b| .{ .borg = try b.update(allocator, entry) },
-            .git => |g| .{ .git = try g.update(allocator, dir, entry) },
+            .borg => |b| .{ .borg = b },
+            .git => |g| .{ .git = try g.update(allocator, path_dir.dir, entry) },
         };
     }
 
-    pub fn skip(s: *const @This(), entry: std.fs.Dir.Entry) !bool {
+    pub fn skip(s: *const @This(), allocator: std.mem.Allocator, path_dir: PathDir, entry: std.fs.Dir.Entry) !bool {
         return switch (s.*) {
-            .borg => |b| b.skip(),
-            .git => |g| g.skip(entry),
+            .borg => |b| b.skip(allocator, path_dir.path, entry.name),
+            .git => |g| g.skip(entry.kind),
         };
     }
 
     pub fn free(s: *@This(), allocator: std.mem.Allocator) void {
         switch (s.*) {
-            .borg => |*b| b.free(allocator),
+            .borg => {},
             .git => |*g| g.free(allocator),
         }
     }
@@ -81,10 +81,10 @@ fn recurse(allocator: std.mem.Allocator, path_dir: PathDir, entry: std.fs.Dir.En
         _states.deinit();
     }
     for (states) |state| {
-        var _state = try state.update(allocator, path_dir.dir, entry);
+        var _state = try state.update(allocator, path_dir, entry);
         errdefer _state.free(allocator);
         try _states.append(_state);
-        if (try _state.skip(entry)) return .exclude;
+        if (try _state.skip(allocator, path_dir, entry)) return .exclude;
     }
 
     if (entry.kind != .directory) return .include;

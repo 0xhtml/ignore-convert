@@ -1,6 +1,6 @@
 const std = @import("std");
-const borg = @import("borg.zig");
-const git = @import("git.zig");
+const Borg = @import("borg.zig");
+const Git = @import("git.zig");
 const walker = @import("walker.zig");
 
 fn printUsageAndExit(programName: []const u8) noreturn {
@@ -9,11 +9,11 @@ fn printUsageAndExit(programName: []const u8) noreturn {
 }
 
 pub fn main() !void {
-    borg.init();
-    defer borg.deinit();
+    Borg.init();
+    defer Borg.deinit();
 
-    try git.init();
-    defer git.deinit() catch unreachable;
+    try Git.init();
+    defer Git.deinit() catch unreachable;
 
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
@@ -24,10 +24,10 @@ pub fn main() !void {
     const program_name = args.next() orelse unreachable;
     const path = args.next() orelse printUsageAndExit(program_name);
 
-    var states = std.ArrayList(walker.Filter).init(arena.allocator());
+    var filters = std.ArrayList(walker.Filter).init(arena.allocator());
     defer {
-        for (states.items) |*state| state.deinit();
-        states.deinit();
+        for (filters.items) |*f| f.free();
+        filters.deinit();
     }
 
     while (args.next()) |arg| {
@@ -35,16 +35,16 @@ pub fn main() !void {
             const file = try std.fs.cwd().openFile(args.next() orelse printUsageAndExit(program_name), .{});
             defer file.close();
 
-            var state = try borg.State.init(file, path.len);
-            errdefer state.deinit();
+            var state = try Borg.new(file, path.len);
+            errdefer state.free();
 
-            try states.append(.{ .borg = state });
+            try filters.append(.{ .borg = state });
         } else if (std.mem.eql(u8, arg, "--git")) {
-            try states.append(.{ .git = git.State.init() });
+            try filters.append(.{ .git = Git.new() });
         } else {
             printUsageAndExit(program_name);
         }
     }
 
-    try walker.recurseRoot(arena.allocator(), path, states.items);
+    try walker.recurseRoot(arena.allocator(), path, filters.items);
 }

@@ -57,39 +57,47 @@ const Patterns = struct {
     }
 };
 
-pub const State = struct {
-    matcher: Patterns.PatternMatcher,
-    offset: usize,
-
-    pub fn init(file: std.fs.File, path_offset: usize) !@This() {
-        // TODO move to more global state
-        const patterns = try Patterns.init();
-        defer patterns.deinit();
-
-        const list = try patterns.loadExcludeFile(file);
-        const matcher = try patterns.patternMatcher();
-        try matcher.addInclexcl(list);
-
-        return .{
-            .matcher = matcher,
-            .offset = path_offset,
-        };
-    }
-
-    pub fn deinit(s: *@This()) void {
-        s.matcher.deinit();
-        s.* = undefined;
-    }
-
-    pub fn skip(s: @This(), path: [*:0]u8) !bool {
-        return s.matcher.match(std.mem.span(path[s.offset..]));
-    }
-};
-
 pub fn init() void {
     python.Py_Initialize();
 }
 
 pub fn deinit() void {
     python.Py_Finalize();
+}
+
+matcher: Patterns.PatternMatcher,
+offset: usize,
+owner: bool,
+
+pub fn new(file: std.fs.File, path_offset: usize) !@This() {
+    // TODO move to more global state
+    const patterns = try Patterns.init();
+    defer patterns.deinit();
+
+    const list = try patterns.loadExcludeFile(file);
+    const matcher = try patterns.patternMatcher();
+    try matcher.addInclexcl(list);
+
+    return .{
+        .matcher = matcher,
+        .offset = path_offset,
+        .owner = true,
+    };
+}
+
+pub fn update(s: @This()) @This() {
+    return .{
+        .matcher = s.matcher,
+        .offset = s.offset,
+        .owner = false,
+    };
+}
+
+pub fn skip(s: @This(), path: [*:0]u8) !bool {
+    return s.matcher.match(std.mem.span(path[s.offset..]));
+}
+
+pub fn free(s: *@This()) void {
+    if (s.owner) s.matcher.deinit();
+    s.* = undefined;
 }

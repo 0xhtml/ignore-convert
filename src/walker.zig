@@ -1,14 +1,14 @@
 const std = @import("std");
-const borg = @import("borg.zig");
-const git = @import("git.zig");
+const Borg = @import("borg.zig");
+const Git = @import("git.zig");
 
 pub const Filter = union(enum) {
-    borg: borg.State,
-    git: git.State,
+    borg: Borg,
+    git: Git,
 
     pub fn update(s: @This(), path: [*:0]u8, entry: std.fs.Dir.Entry) !@This() {
         return switch (s) {
-            .borg => |b| .{ .borg = b },
+            .borg => |b| .{ .borg = b.update() },
             .git => |g| .{ .git = try g.update(path, entry.kind) },
         };
     }
@@ -22,15 +22,8 @@ pub const Filter = union(enum) {
 
     pub fn free(s: *@This()) void {
         switch (s.*) {
-            .borg => {},
+            .borg => |*b| b.free(),
             .git => |*g| g.free(),
-        }
-    }
-
-    pub fn deinit(s: *@This()) void {
-        switch (s.*) {
-            .borg => |*b| b.deinit(),
-            .git => {},
         }
     }
 };

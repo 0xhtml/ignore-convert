@@ -1,4 +1,5 @@
 const std = @import("std");
+const common = @import("common.zig");
 const python = @cImport({
     @cDefine("PY_SSIZE_T_CLEAN", "");
     @cInclude("python3.12/Python.h");
@@ -67,7 +68,6 @@ pub fn deinit() void {
 
 matcher: Patterns.PatternMatcher,
 offset: usize,
-owner: bool,
 
 pub fn new(file: std.fs.File, path_offset: usize) !@This() {
     // TODO move to more global state
@@ -81,23 +81,14 @@ pub fn new(file: std.fs.File, path_offset: usize) !@This() {
     return .{
         .matcher = matcher,
         .offset = path_offset,
-        .owner = true,
     };
 }
 
-pub fn update(s: @This()) @This() {
-    return .{
-        .matcher = s.matcher,
-        .offset = s.offset,
-        .owner = false,
-    };
-}
-
-pub fn skip(s: @This(), path: [*:0]u8) !bool {
-    return s.matcher.match(std.mem.span(path[s.offset..]));
+pub fn check(s: @This(), path: [:0]const u8) !common.Action {
+    return if (try s.matcher.match(path[s.offset..])) .exclude else .include;
 }
 
 pub fn free(s: *@This()) void {
-    if (s.owner) s.matcher.deinit();
+    s.matcher.deinit();
     s.* = undefined;
 }

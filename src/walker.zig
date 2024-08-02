@@ -1,4 +1,5 @@
 const std = @import("std");
+const common = @import("common.zig");
 const Borg = @import("borg.zig");
 const Git = @import("git.zig");
 
@@ -6,17 +7,24 @@ pub const Filter = union(enum) {
     borg: Borg,
     git: Git,
 
-    pub fn update(s: @This(), path: [*:0]u8, entry: std.fs.Dir.Entry) !@This() {
-        return switch (s) {
-            .borg => |b| .{ .borg = b.update() },
-            .git => |g| .{ .git = try g.update(path, entry.kind) },
+    fn enter(s: *@This(), level: usize, _path: [:0]const u8) !void {
+        return switch (s.*) {
+            .borg => {},
+            .git => |*g| g.enter(level, _path),
         };
     }
 
-    pub fn skip(s: @This(), path: [*:0]u8, entry: std.fs.Dir.Entry) !bool {
+    fn leave(s: *@This(), level: usize) void {
+        return switch (s.*) {
+            .borg => {},
+            .git => |*g| g.leave(level),
+        };
+    }
+
+    fn check(s: @This(), kind: std.fs.File.Kind, _path: [:0]const u8) !common.Action {
         return switch (s) {
-            .borg => |b| b.skip(std.mem.span(path)),
-            .git => |g| g.skip(path, entry.kind),
+            .borg => |b| b.check(_path),
+            .git => |g| g.check(kind, _path),
         };
     }
 
@@ -28,96 +36,133 @@ pub const Filter = union(enum) {
     }
 };
 
-const Return = enum {
-    exclude,
-    include,
-    ignore,
+pub const Entry = struct {
+    action: common.Action,
+    path: [:0]const u8,
+
+    pub fn copy(s: @This(), allocator: std.mem.Allocator) !Entry {
+        return .{ .action = s.action, .path = try allocator.dupeZ(u8, s.path) };
+    }
 };
 
-pub fn recurseRoot(allocator: std.mem.Allocator, path: []const u8, filters: []const Filter) !void {
-    var dir = try std.fs.cwd().openDir(path, .{ .iterate = true });
-    defer dir.close();
+pub const ActionOrEntry = union(enum) {
+    enter: void,
+    leave: struct {
+        path: [:0]const u8,
+    },
+    entry: Entry,
+};
 
-    var _path: [std.fs.MAX_PATH_BYTES:0]u8 = undefined;
-    @memcpy(_path[0..path.len], path);
-    _path[path.len] = 0;
+const StackItem = struct {
+    iter: std.fs.Dir.Iterator,
+    dirname_len: usize,
+};
 
-    var it = dir.iterate();
-    while (try it.next()) |entry| {
-        switch (try recurse(allocator, &_path, dir, entry, filters)) {
-            .exclude => std.debug.print("- {s}\n", .{entry.name}),
-            .include => std.debug.print("+ {s}\n", .{entry.name}),
-            .ignore => {},
-        }
-    }
+allocator: std.mem.Allocator,
+stack: std.ArrayListUnmanaged(StackItem),
+name_buffer: std.ArrayListUnmanaged(u8),
+filters: []Filter,
+
+pub fn init(allocator: std.mem.Allocator, dirname: [:0]const u8, filters: []Filter) !@This() {
+    var stack: std.ArrayListUnmanaged(StackItem) = .{};
+    errdefer stack.deinit(allocator);
+
+    var name_buffer = try std.ArrayListUnmanaged(u8).initCapacity(allocator, dirname.len + 1);
+    errdefer name_buffer.deinit(allocator);
+    name_buffer.appendSliceAssumeCapacity(dirname);
+    name_buffer.appendAssumeCapacity(0);
+
+    var dir = try std.fs.cwd().openDir(dirname, .{ .iterate = true });
+    errdefer dir.close();
+
+    try stack.append(allocator, .{
+        .iter = dir.iterateAssumeFirstIteration(),
+        .dirname_len = name_buffer.items.len - 1,
+    });
+
+    for (filters) |*f| try f.enter(1, dirname);
+
+    return .{
+        .allocator = allocator,
+        .stack = stack,
+        .name_buffer = name_buffer,
+        .filters = filters,
+    };
 }
 
-fn recurse(allocator: std.mem.Allocator, path: *[std.fs.MAX_PATH_BYTES:0]u8, dir: std.fs.Dir, entry: std.fs.Dir.Entry, filters: []const Filter) !Return {
-    switch (entry.kind) {
-        .directory, .file => {},
-        .sym_link => return .ignore,
-        else => return error.UnsupportedFileType,
-    }
+fn path(s: @This()) [:0]const u8 {
+    return s.name_buffer.items[0 .. s.name_buffer.items.len - 1 :0];
+}
 
-    // TODO make a option or move to git
-    if (std.mem.eql(u8, entry.name, ".git")) return .ignore;
+fn enter(s: *@This(), name: []const u8) !void {
+    var dir = try s.stack.getLast().iter.dir.openDir(name, .{ .iterate = true });
+    errdefer dir.close();
 
-    var path_len = std.mem.span(@as([*:0]u8, path)).len;
-    if (path_len != 0) {
-        path[path_len] = '/';
-        path_len += 1;
-    }
-    @memcpy(path[path_len..path_len + entry.name.len], entry.name);
-    path[path_len + entry.name.len] = 0;
-    if (path_len != 0) path_len -= 1;
-    defer path[path_len] = 0;
+    try s.stack.append(s.allocator, .{
+        .iter = dir.iterateAssumeFirstIteration(),
+        .dirname_len = s.name_buffer.items.len - 1,
+    });
 
-    var _filters = std.ArrayList(Filter).init(allocator);
-    defer {
-        for (_filters.items) |*f| f.free();
-        _filters.deinit();
-    }
-    for (filters) |filter| {
-        var _filter = try filter.update(path, entry);
-        errdefer _filter.free();
-        try _filters.append(_filter);
-        if (try _filter.skip(path, entry)) return .exclude;
-    }
+    for (s.filters) |*f| try f.enter(s.stack.items.len, s.path());
+}
 
-    if (entry.kind != .directory) return .include;
-
-    var _dir = try dir.openDir(entry.name, .{ .iterate = true });
-    defer _dir.close();
-
-    var excluded = std.ArrayList([]const u8).init(allocator);
-    defer {
-        for (excluded.items) |name| allocator.free(name);
-        excluded.deinit();
-    }
-
-    var included = std.ArrayList([]const u8).init(allocator);
-    defer {
-        for (included.items) |name| allocator.free(name);
-        included.deinit();
-    }
-
-    var it = _dir.iterate();
-    while (try it.next()) |_entry| {
-        const name = try allocator.dupe(u8, _entry.name);
-        errdefer allocator.free(name);
-
-        switch (try recurse(allocator, path, _dir, _entry, _filters.items)) {
-            .exclude => try excluded.append(name),
-            .include => try included.append(name),
-            .ignore => allocator.free(name),
+fn check(s: @This(), kind: std.fs.File.Kind) !common.Action {
+    for (s.filters) |f| {
+        switch (try f.check(kind, s.path())) {
+            .include => {},
+            .exclude => return .exclude,
         }
     }
+    return .include;
+}
 
-    if (included.items.len != 0 and excluded.items.len != 0) {
-        for (excluded.items) |name| std.debug.print("- {s}/{s}\n", .{ @as([*:0]u8, path), name });
-        for (included.items) |name| std.debug.print("+ {s}/{s}\n", .{ @as([*:0]u8, path), name });
-        return .include;
+pub fn next(s: *@This()) !?ActionOrEntry {
+    while (s.stack.items.len != 0) {
+        const top = &s.stack.items[s.stack.items.len - 1];
+
+        if (try top.iter.next()) |entry| {
+            s.name_buffer.shrinkRetainingCapacity(top.dirname_len);
+            if (s.name_buffer.items.len != 0) s.name_buffer.appendAssumeCapacity(std.fs.path.sep);
+            try s.name_buffer.ensureUnusedCapacity(s.allocator, entry.name.len + 1);
+            s.name_buffer.appendSliceAssumeCapacity(entry.name);
+            s.name_buffer.appendAssumeCapacity(0);
+
+            const action = try s.check(entry.kind);
+            return switch (entry.kind) {
+                .directory => switch (action) {
+                    .include => blk: {
+                        try s.enter(entry.name);
+                        break :blk .{ .enter = {} };
+                    },
+                    .exclude => .{ .entry = .{
+                        .action = .exclude,
+                        .path = s.path(),
+                    } },
+                },
+                else => .{ .entry = .{
+                    .action = action,
+                    .path = s.path(),
+                } },
+            };
+        }
+
+        for (s.filters) |*f| f.leave(s.stack.items.len);
+        var item = s.stack.pop();
+        item.iter.dir.close();
+
+        s.name_buffer.shrinkRetainingCapacity(item.dirname_len);
+        s.name_buffer.appendAssumeCapacity(0);
+
+        if (s.stack.items.len != 0) return .{ .leave = .{
+            .path = s.path(),
+        } };
     }
-    if (included.items.len == 0 and excluded.items.len != 0) return .exclude;
-    return .ignore;
+    return null;
+}
+
+pub fn deinit(s: *@This(), allocator: std.mem.Allocator) void {
+    for (s.stack.items) |*i| i.iter.dir.close();
+    s.stack.deinit(allocator);
+    s.name_buffer.deinit(allocator);
+    s.* = undefined;
 }

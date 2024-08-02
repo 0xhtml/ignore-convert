@@ -42,10 +42,10 @@ pub fn next(s: *@This()) !?[]const u8 {
 
         if (try s.walker.next()) |action_or_entry| {
             switch (action_or_entry) {
-                .enter => {
+                .enter => |e| {
                     try s.stack.append(s.walker.allocator, .{
                         .index = s.entries.items.len,
-                        .include = false,
+                        .include = e.include_empty,
                     });
                 },
                 .entry => |entry| {

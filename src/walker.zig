@@ -28,6 +28,13 @@ pub const Filter = union(enum) {
         };
     }
 
+    fn includeEmpty(s: @This()) bool {
+        return switch (s) {
+            .borg => true,
+            .git => |g| g.includeEmpty(),
+        };
+    }
+
     pub fn free(s: *@This()) void {
         switch (s.*) {
             .borg => |*b| b.free(),
@@ -36,21 +43,17 @@ pub const Filter = union(enum) {
     }
 };
 
-pub const Entry = struct {
-    action: common.Action,
-    path: [:0]const u8,
-
-    pub fn copy(s: @This(), allocator: std.mem.Allocator) !Entry {
-        return .{ .action = s.action, .path = try allocator.dupeZ(u8, s.path) };
-    }
-};
-
 pub const ActionOrEntry = union(enum) {
-    enter: void,
+    enter: struct {
+        include_empty: bool,
+    },
     leave: struct {
         path: [:0]const u8,
     },
-    entry: Entry,
+    entry: struct {
+        action: common.Action,
+        path: [:0]const u8,
+    },
 };
 
 const StackItem = struct {
@@ -116,6 +119,11 @@ fn check(s: @This(), kind: std.fs.File.Kind) !common.Action {
     return .include;
 }
 
+fn includeEmpty(s: @This()) bool {
+    for (s.filters) |f| if (!f.includeEmpty()) return false;
+    return true;
+}
+
 pub fn next(s: *@This()) !?ActionOrEntry {
     while (s.stack.items.len != 0) {
         const top = &s.stack.items[s.stack.items.len - 1];
@@ -132,17 +140,19 @@ pub fn next(s: *@This()) !?ActionOrEntry {
                 .directory => switch (action) {
                     .include => blk: {
                         try s.enter(entry.name);
-                        break :blk .{ .enter = {} };
+                        break :blk .{ .enter = .{ .include_empty = s.includeEmpty() } };
                     },
                     .exclude => .{ .entry = .{
                         .action = .exclude,
                         .path = s.path(),
                     } },
                 },
-                else => .{ .entry = .{
-                    .action = action,
-                    .path = s.path(),
-                } },
+                else => blk: {
+                    break :blk .{ .entry = .{
+                        .action = action,
+                        .path = s.path(),
+                    } };
+                },
             };
         }
 

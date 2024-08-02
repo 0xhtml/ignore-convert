@@ -67,6 +67,10 @@ pub fn check(s: @This(), kind: std.fs.Dir.Entry.Kind, path: [:0]const u8) !commo
     };
 }
 
+pub fn includeEmpty(s: @This()) bool {
+    return s.repo == null;
+}
+
 pub fn free(s: *@This()) void {
     libgit2.git_repository_free(s.repo);
     s.* = undefined;

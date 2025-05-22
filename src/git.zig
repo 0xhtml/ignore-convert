@@ -21,7 +21,20 @@ pub fn new() @This() {
     return .{ .repo = null, .level = 0, .dirname_len = 0 };
 }
 
-pub fn enter(s: *@This(), level: usize, path: [:0]const u8) !void {
+pub fn filter(s: *@This()) common.Filter {
+    return .{
+        .ptr = s,
+        .enterFn = enter,
+        .leaveFn = leave,
+        .checkFn = check,
+        .includeEmptyFn = includeEmpty,
+        .freeFn = free,
+    };
+}
+
+fn enter(ptr: *anyopaque, level: usize, path: [:0]const u8) void {
+    const s: *@This() = @ptrCast(@alignCast(ptr));
+
     if (s.repo != null) return;
 
     // TODO: support opening repo in parent dir
@@ -33,29 +46,16 @@ pub fn enter(s: *@This(), level: usize, path: [:0]const u8) !void {
     _ = libgit2.git_repository_submodule_cache_all(s.repo);
 }
 
-pub fn leave(s: *@This(), level: usize) void {
+fn leave(ptr: *anyopaque, level: usize) void {
+    const s: *@This() = @ptrCast(@alignCast(ptr));
     if (s.repo == null or level > s.level) return;
     libgit2.git_repository_free(s.repo);
     s.repo = null;
 }
 
-fn isIgnored(s: @This(), path: [:0]const u8) !bool {
-    // TODO configure libgit to include .git
-    if (std.mem.startsWith(u8, path, ".git") and (path.len == 4 or path[4] == '/')) {
-        return false;
-    }
-    var ignored: c_int = undefined;
-    if (libgit2.git_ignore_path_is_ignored(&ignored, s.repo, path) < 0) {
-        return error.InvalidIgnoreRules;
-    }
-    return switch (ignored) {
-        0 => false,
-        1 => true,
-        else => unreachable,
-    };
-}
+fn check(ptr: *const anyopaque, kind: std.fs.Dir.Entry.Kind, path: [:0]const u8) !common.Action {
+    const s: *const @This() = @ptrCast(@alignCast(ptr));
 
-pub fn check(s: @This(), kind: std.fs.Dir.Entry.Kind, path: [:0]const u8) !common.Action {
     if (s.repo == null) return .include;
 
     const offset_path = path[s.dirname_len + 1 .. :0];
@@ -63,15 +63,31 @@ pub fn check(s: @This(), kind: std.fs.Dir.Entry.Kind, path: [:0]const u8) !commo
     return switch (kind) {
         // TODO make submodule exclusion configurable
         .directory => if (libgit2.git_submodule_lookup(null, s.repo, offset_path) >= 0) .exclude else .include,
-        else => if (try isIgnored(s, offset_path)) .exclude else .include,
+        else => blk: {
+            // TODO configure libgit to include .git
+            if (std.mem.startsWith(u8, offset_path, ".git") and (offset_path.len == 4 or offset_path[4] == '/')) {
+                break :blk .include;
+            }
+            var ignored: c_int = undefined;
+            if (libgit2.git_ignore_path_is_ignored(&ignored, s.repo, offset_path) < 0) {
+                break :blk error.InvalidIgnoreRules;
+            }
+            break :blk switch (ignored) {
+                0 => .include,
+                1 => .exclude,
+                else => unreachable,
+            };
+        },
     };
 }
 
-pub fn includeEmpty(s: @This()) bool {
+fn includeEmpty(ptr: *const anyopaque) bool {
+    const s: *const @This() = @ptrCast(@alignCast(ptr));
     return s.repo == null;
 }
 
-pub fn free(s: *@This()) void {
+fn free(ptr: *anyopaque) void {
+    const s: *@This() = @ptrCast(@alignCast(ptr));
     libgit2.git_repository_free(s.repo);
     s.* = undefined;
 }

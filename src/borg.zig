@@ -2,33 +2,33 @@ const std = @import("std");
 const common = @import("common.zig");
 const python = @cImport({
     @cDefine("PY_SSIZE_T_CLEAN", "");
-    @cInclude("python3.12/Python.h");
+    @cInclude("python3.13/Python.h");
 });
+
+const PatternMatcher = struct {
+    obj: *python.PyObject,
+
+    fn deinit(s: @This()) void {
+        python.Py_DECREF(s.obj);
+    }
+
+    fn addInclexcl(s: @This(), patterns: *python.PyObject) !void {
+        if (python.PyObject_CallMethod(s.obj, "add_inclexcl", "O", patterns) != python.Py_None()) return error.PythonError;
+    }
+
+    fn match(s: @This(), path: []const u8) !bool {
+        const result = python.PyObject_CallMethod(s.obj, "match", "s#", path.ptr, path.len) orelse return error.PythonError;
+        defer python.Py_DECREF(result);
+        return switch (python.PyLong_AsLong(result)) {
+            0 => true,
+            1 => false,
+            else => error.PythonError,
+        };
+    }
+};
 
 const Patterns = struct {
     obj: *python.PyObject,
-
-    const PatternMatcher = struct {
-        obj: *python.PyObject,
-
-        fn deinit(s: @This()) void {
-            python.Py_DECREF(s.obj);
-        }
-
-        fn addInclexcl(s: @This(), patterns: *python.PyObject) !void {
-            if (python.PyObject_CallMethod(s.obj, "add_inclexcl", "O", patterns) != python.Py_None()) return error.PythonError;
-        }
-
-        fn match(s: @This(), path: []const u8) !bool {
-            const result = python.PyObject_CallMethod(s.obj, "match", "s#", path.ptr, path.len) orelse return error.PythonError;
-            defer python.Py_DECREF(result);
-            return switch (python.PyLong_AsLong(result)) {
-                0 => true,
-                1 => false,
-                else => error.PythonError,
-            };
-        }
-    };
 
     fn init() !@This() {
         return .{
@@ -66,7 +66,7 @@ pub fn deinit() void {
     python.Py_Finalize();
 }
 
-matcher: Patterns.PatternMatcher,
+matcher: PatternMatcher,
 offset: usize,
 
 pub fn new(file: std.fs.File, path_offset: usize) !@This() {
@@ -84,11 +84,25 @@ pub fn new(file: std.fs.File, path_offset: usize) !@This() {
     };
 }
 
-pub fn check(s: @This(), path: [:0]const u8) !common.Action {
+pub fn filter(s: *@This()) common.Filter {
+    return .{
+        .ptr = s,
+        .enterFn = null,
+        .leaveFn = null,
+        .checkFn = check,
+        .includeEmptyFn = null,
+        .freeFn = free,
+    };
+}
+
+fn check(ptr: *anyopaque, kind: std.fs.Dir.Entry.Kind, path: [:0]const u8) !common.Action {
+    const s: *@This() = @ptrCast(@alignCast(ptr));
+    _ = kind;
     return if (try s.matcher.match(path[s.offset..])) .exclude else .include;
 }
 
-pub fn free(s: *@This()) void {
+fn free(ptr: *anyopaque) void {
+    const s: *@This() = @ptrCast(@alignCast(ptr));
     s.matcher.deinit();
     s.* = undefined;
 }

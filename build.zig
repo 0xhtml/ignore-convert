@@ -9,7 +9,7 @@ pub fn build(b: *std.Build) void {
     });
     exe.addIncludePath(.{ .cwd_relative = "/usr/include" });
     exe.linkSystemLibrary("libgit2");
-    exe.linkSystemLibrary("python3.12");
+    exe.linkSystemLibrary("python3.13");
     exe.linkLibC();
     b.installArtifact(exe);
 }

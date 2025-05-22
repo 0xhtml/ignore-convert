@@ -1,4 +1,5 @@
 const std = @import("std");
+const common = @import("common.zig");
 const Walker = @import("walker.zig");
 
 const StackItem =  struct {
@@ -11,7 +12,7 @@ stack: std.ArrayListUnmanaged(StackItem),
 entries: std.ArrayListUnmanaged([]const u8),
 returning: bool,
 
-pub fn init(allocator: std.mem.Allocator, path: [:0]const u8, filters: []Walker.Filter) !@This() {
+pub fn init(allocator: std.mem.Allocator, path: [:0]const u8, filters: []common.Filter) !@This() {
     var walker = try Walker.init(allocator, path, filters);
     errdefer walker.deinit(allocator);
 

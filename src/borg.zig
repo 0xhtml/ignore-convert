@@ -59,7 +59,7 @@ const Patterns = struct {
 };
 
 pub fn init() void {
-    python.Py_Initialize();
+    python.Py_InitializeEx(0);
 }
 
 pub fn deinit() void {
